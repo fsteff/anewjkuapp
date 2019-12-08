@@ -50,6 +50,8 @@ import net.fortuna.ical4j.model.Component;
 import net.fortuna.ical4j.model.Property;
 import net.fortuna.ical4j.model.TimeZone;
 import net.fortuna.ical4j.model.component.VEvent;
+import net.fortuna.ical4j.model.property.Description;
+import net.fortuna.ical4j.model.property.Summary;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,8 +69,11 @@ import org.voidsink.anewjkuapp.notification.CalendarChangedNotification;
 import org.voidsink.anewjkuapp.utils.AppUtils;
 import org.voidsink.anewjkuapp.utils.Consts;
 
+import java.io.IOException;
+import java.net.URISyntaxException;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
+import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
@@ -194,10 +199,8 @@ public class ImportCalendarWorker extends BaseWorker {
                             if (e instanceof VEvent) {
                                 VEvent ev = ((VEvent) e);
 
-                                String summary = ev.getSummary().getValue()
-                                        .trim();
-                                String description = ev.getDescription()
-                                        .getValue().trim();
+                                String summary = valueOrEmpty(ev.getSummary());
+                                String description = valueOrEmpty(ev.getDescription());
 
                                 Matcher courseIdTermMatcher = courseIdTermPattern
                                         .matcher(summary); // (courseId/term)
@@ -229,10 +232,8 @@ public class ImportCalendarWorker extends BaseWorker {
                                 summary = summary.trim().replaceAll("([\\r\\n]|\\\\n)+", ", ").trim();
                                 description = description.trim();
 
-                                ev.getProperty(Property.SUMMARY).setValue(
-                                        summary);
-                                ev.getProperty(Property.DESCRIPTION).setValue(
-                                        description);
+                                setOrAddProperty(ev, Summary.class, summary);
+                                setOrAddProperty(ev, Description.class, description);
                             }
                         }
 
@@ -330,10 +331,10 @@ public class ImportCalendarWorker extends BaseWorker {
                                                     // check to see if the entry needs to be updated
                                                     ((match.getStartDate().getDate().getTime() != eventDTStart) ||
                                                             (match.getEndDate().getDate().getTime() != eventDTEnd) ||
-                                                            !match.getSummary().getValue().trim().equals(eventTitle.trim()) ||
-                                                            !match.getSummary().getValue().trim().equals(eventTitle.trim()) ||
-                                                            !match.getLocation().getValue().trim().equals(eventLocation.trim()) ||
-                                                            !match.getDescription().getValue().trim().equals(eventDescription.trim())
+                                                            !valueOrEmpty(match.getSummary()).equals(eventTitle.trim()) ||
+                                                            !valueOrEmpty(match.getSummary()).equals(eventTitle.trim()) ||
+                                                            !valueOrEmpty(match.getLocation()).equals(eventLocation.trim()) ||
+                                                            !valueOrEmpty(match.getDescription()).equals(eventDescription.trim())
                                                     )) {
                                                 Uri existingUri = calUri.buildUpon()
                                                         .appendPath(eventId).build();
@@ -501,16 +502,15 @@ public class ImportCalendarWorker extends BaseWorker {
 
     private String getEventString(Context c, VEvent v) {
         return AppUtils.getEventString(c, v.getStartDate().getDate().getTime(), v
-                .getEndDate().getDate().getTime(), v.getSummary().getValue()
-                .trim(), false);
+                .getEndDate().getDate().getTime(), valueOrEmpty(v.getSummary()), false);
     }
 
     private ContentValues getContentValuesFromEvent(VEvent v) {
         ContentValues cv = new ContentValues();
 
-        cv.put(CalendarContractWrapper.Events.EVENT_LOCATION(), v.getLocation().getValue().trim());
-        cv.put(CalendarContractWrapper.Events.TITLE(), v.getSummary().getValue().trim());
-        cv.put(CalendarContractWrapper.Events.DESCRIPTION(), v.getDescription().getValue().trim());
+        cv.put(CalendarContractWrapper.Events.EVENT_LOCATION(), valueOrEmpty(v.getLocation()));
+        cv.put(CalendarContractWrapper.Events.TITLE(), valueOrEmpty(v.getSummary()));
+        cv.put(CalendarContractWrapper.Events.DESCRIPTION(), valueOrEmpty(v.getDescription()));
         cv.put(CalendarContractWrapper.Events.DTSTART(), v.getStartDate().getDate().getTime());
         cv.put(CalendarContractWrapper.Events.DTEND(), v.getEndDate().getDate().getTime());
 
@@ -519,7 +519,7 @@ public class ImportCalendarWorker extends BaseWorker {
 
     private String getLocationExtra(VEvent event) {
         try {
-            String name = event.getLocation().getValue().trim();
+            String name = valueOrEmpty(event.getLocation());
 
             String formattedAddress = "Altenbergerstraße 69, 4040 Linz, Österreich";
             double latitude = 48.33706;
@@ -582,6 +582,31 @@ public class ImportCalendarWorker extends BaseWorker {
         } catch (Exception e) {
             Analytics.sendException(getApplicationContext(), e, true);
             return "";
+        }
+    }
+
+    private static <T extends Property> String valueOrElse(T obj, String elseValue) {
+        String retVal = obj != null ? obj.getValue() : elseValue;
+        return retVal.trim();
+    }
+
+    private static <T extends Property> String valueOrEmpty(T obj) {
+        return valueOrElse(obj, "");
+    }
+
+    private <T extends Property> void setOrAddProperty(VEvent evt, Class<T> clazz, String value)
+            throws IOException, URISyntaxException, ParseException {
+        String name = clazz.getName().toUpperCase();
+        T property = evt.getProperty(name);
+        if(property != null) {
+            property.setValue(value);
+        } else {
+            try {
+                property = clazz.getConstructor(String.class).newInstance(value);
+                evt.getProperties().add(property);
+            } catch (Exception e) {
+                Analytics.sendException(getApplicationContext(), e, true);
+            }
         }
     }
 }
